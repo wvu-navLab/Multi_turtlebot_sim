@@ -2,10 +2,10 @@
 
 ## Introduction
 
-This package is meant to be an example on how robots needs to be configured in order to support simulating multi robots in the same environment.
+This repository contains multi turtle bot simulation in Gazebo with a waypoint follower code. The sensor measurements are simulated and DEKF algorithm is used for localization.
 
 ## Platform
-ROS 2 Version: Foxy
+ROS 2 Version: Humble
 
 ## Notes
 
