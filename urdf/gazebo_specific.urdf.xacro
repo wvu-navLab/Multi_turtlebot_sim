@@ -84,6 +84,59 @@
       </sensor>
     </gazebo>
 
+    <!-- IMU Sensor -->
+    <gazebo reference="imu_link">
+      <sensor type="imu" name="imu_sensor">
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <imu>
+          <topic>${topic_prefix}/imu</topic>
+          <orientation>true</orientation>
+          <angular_velocity>true</angular_velocity>
+          <linear_acceleration>true</linear_acceleration>
+        </imu>
+        <plugin name="gazebo_ros_imu" filename="libgazebo_ros_imu_sensor.so
+">
+          <ros>
+            <namespace>${topic_prefix}</namespace>
+            <remapping>imu:=/imu</remapping>
+          </ros>
+          <update_rate>50.0</update_rate>
+          <body_name>imu_link</body_name>
+          <gaussian_noise>0</gaussian_noise>
+          <xyz_offset>0 0 0</xyz_offset>
+          <rpy_offset>0 0 0</rpy_offset>
+        </plugin>
+      </sensor>
+    </gazebo>
+
+    <!-- UWB Sensor -->
+    <gazebo reference="uwb_link">
+      <sensor type="range" name="uwb_sensor">
+        <always_on>true</always_on>
+        <update_rate>10</update_rate>
+        <visualize>true</visualize>
+        <pose>0 0 0 0 0 0</pose>
+        <range>
+          <min>0.02</min>
+          <max>10.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <plugin name="gazebo_ros_range" filename="libgazebo_ros_range.so">
+          <ros>
+            <namespace>${topic_prefix}</namespace>
+            <remapping>uwb:=/uwb</remapping>
+          </ros>
+          <update_rate>10.0</update_rate>
+          <radiation>ultrasonic</radiation>
+          <frame_name>${frame_prefix}uwb</frame_name>
+        </plugin>
+      </sensor>
+    </gazebo>
+
+
+
+
 	</xacro:macro>
 
 </robot>

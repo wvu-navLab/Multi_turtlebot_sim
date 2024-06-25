@@ -32,6 +32,16 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}/
 )
 
+install(PROGRAMS
+scripts/uwb_node.py
+DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+scripts/imu_node.py
+DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY launch meshes urdf worlds models param map
   DESTINATION share/${PROJECT_NAME}/
 )
