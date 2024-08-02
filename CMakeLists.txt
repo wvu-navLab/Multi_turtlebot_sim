@@ -7,9 +7,9 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -21,6 +21,13 @@ if(BUILD_TESTING)
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  msg/RobotState.msg
+  msg/RobotCovariance.msg
+  DEPENDENCIES std_msgs
+)
+ament_export_dependencies(rosidl_default_runtime)
 
 install(PROGRAMS
   scripts/waypoint_follower.py
@@ -40,6 +47,11 @@ DESTINATION lib/${PROJECT_NAME}
 install(PROGRAMS
 scripts/imu_node.py
 DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/ekf.py
+  DESTINATION lib/${PROJECT_NAME}/
 )
 
 install(DIRECTORY launch meshes urdf worlds models param map

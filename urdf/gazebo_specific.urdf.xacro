@@ -95,8 +95,7 @@
           <angular_velocity>true</angular_velocity>
           <linear_acceleration>true</linear_acceleration>
         </imu>
-        <plugin name="gazebo_ros_imu" filename="libgazebo_ros_imu_sensor.so
-">
+        <plugin name="gazebo_ros_imu" filename="libgazebo_ros_imu_sensor.so">
           <ros>
             <namespace>${topic_prefix}</namespace>
             <remapping>imu:=/imu</remapping>
