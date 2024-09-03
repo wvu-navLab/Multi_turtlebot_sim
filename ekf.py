@@ -8,6 +8,7 @@ from std_msgs.msg import Float64MultiArray
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from multi_turtlebot_sim.msg import RobotState, RobotCovariance
+from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 
 def skew_symmetric(v):
@@ -44,7 +45,7 @@ def calc_Q(dt, CbnPlus, accel):
     Sbgd = (sig_gyro_inRun ** 2) / dt
     
     # Initialize sub-matrices
-    F21 = -skew_symmetric(np.dot(CbnPlus, accel))
+    '''F21 = -skew_symmetric(np.dot(CbnPlus, accel))
     
     # Identity matrix for transformation in XYZ frame
     T_rn_p = np.eye(3)
@@ -75,6 +76,8 @@ def calc_Q(dt, CbnPlus, accel):
     Q54 = np.zeros((3, 3))
     Q55 = Sbgd * dt * np.eye(3)
     
+    Q11 = np.random.normal(0,0.001)
+
     # Assemble the full Q matrix
     Q_block = np.block([
         [Q11, Q12, Q13, Q14, Q15],
@@ -87,7 +90,26 @@ def calc_Q(dt, CbnPlus, accel):
         [Q_block, np.zeros((15, 15)), np.zeros((15, 15))],
         [np.zeros((15, 15)), Q_block, np.zeros((15, 15))],
         [np.zeros((15, 15)), np.zeros((15, 15)), Q_block]
+    ])'''
+
+        # Generate random Gaussian values for the diagonal elements
+    Q_diag = np.zeros(15)
+    Q_diag[0:3] = np.random.normal(0, Srg, 3)  # Attitude noise (due to gyro noise)
+    Q_diag[3:6] = np.random.normal(0, Sra, 3)  # Velocity noise (due to acceleration noise)
+    Q_diag[6:9] = np.random.normal(0, 0.0001, 3)  # Position noise (due to integrated velocity)
+    Q_diag[9:12] = np.random.normal(0, Sbad, 3)  # Accel bias noise
+    Q_diag[12:15] = np.random.normal(0, Sbgd, 3)  # Gyro bias noise
+
+    # Build the diagonal Q matrix
+    Q_block = np.diag(Q_diag)
+
+    # Extend Q to 45x45 block diagonal matrix for 3 robots
+    Q = np.block([
+        [Q_block, np.zeros((15, 15)), np.zeros((15, 15))],
+        [np.zeros((15, 15)), Q_block, np.zeros((15, 15))],
+        [np.zeros((15, 15)), np.zeros((15, 15)), Q_block]
     ])
+
     return Q
 
 class EKFNode(Node):
@@ -102,15 +124,21 @@ class EKFNode(Node):
         # State vector: [attitude, velocity, position, acc bias, gyro bias] for each robot
         self.nominal_state = np.zeros(45)  # 15 states per robot, 3 robots
         self.error_state = np.zeros(45)    # 15 error states per robot, 3 robots
-        self.covariance = np.eye(45) * 0.1
+        self.covariance = np.eye(45) * 0.01
         self.initialized = [False, False, False]
         self.f_ib_b = [np.zeros(3), np.zeros(3), np.zeros(3)]
         self.gyro_world = [np.zeros(3), np.zeros(3), np.zeros(3)]
 
     def create_subscriptions(self):
-        self.create_subscription(Imu, '/robot1/imu', self.imu_callback_1, 10)
-        self.create_subscription(Imu, '/robot2/imu', self.imu_callback_2, 10)
-        self.create_subscription(Imu, '/robot3/imu', self.imu_callback_3, 10)
+        self.imu_sub_1 = Subscriber(self, Imu, '/robot1/imu')
+        self.imu_sub_2 = Subscriber(self, Imu, '/robot2/imu')
+        self.imu_sub_3 = Subscriber(self, Imu, '/robot3/imu')
+        self.sync = ApproximateTimeSynchronizer(
+            [self.imu_sub_1, self.imu_sub_2, self.imu_sub_3],
+            queue_size=10,
+            slop=0.1  # 100ms tolerance for synchronization
+        )
+        self.sync.registerCallback(self.imu_callback)
         self.create_subscription(Float64MultiArray, '/robot1_2/uwb', self.uwb_callback_1_2, 10)
         self.create_subscription(Float64MultiArray, '/robot1_3/uwb', self.uwb_callback_1_3, 10)
         self.create_subscription(Float64MultiArray, '/robot2_3/uwb', self.uwb_callback_2_3, 10)
@@ -125,23 +153,43 @@ class EKFNode(Node):
         self.covariance_pub_2 = self.create_publisher(RobotCovariance, '/robot2/covariance', 10)
         self.state_pub_3 = self.create_publisher(RobotState, '/robot3/state', 10)
         self.covariance_pub_3 = self.create_publisher(RobotCovariance, '/robot3/covariance', 10)
+    
+    def imu_callback(self, imu_msg_1, imu_msg_2, imu_msg_3):
+        # Process synchronized IMU messages from all three robots
+        self.process_imu(imu_msg_1, 0)
+        self.process_imu(imu_msg_2, 1)
+        self.process_imu(imu_msg_3, 2)
 
     def predict(self, dt):
         g = np.array([0, 0, -9.81])  # gravity vector
 
-        for i in range(3):
-            idx = i * 15
-            roll, pitch, yaw = self.nominal_state[idx], self.nominal_state[idx+1], self.nominal_state[idx+2]
-            Cbn = R.from_euler('xyz', [roll, pitch, yaw]).as_matrix()
-            gyro = self.gyro_world[i] - self.nominal_state[idx+12:idx+15]
-            accel = self.f_ib_b[i] #- self.nominal_state[idx+9:idx+12]
-            print("accel", accel)
+        # Process the IMU data for each robot simultaneously
+        roll1, pitch1, yaw1 = self.nominal_state[0], self.nominal_state[1], self.nominal_state[2]
+        roll2, pitch2, yaw2 = self.nominal_state[15], self.nominal_state[16], self.nominal_state[17]
+        roll3, pitch3, yaw3 = self.nominal_state[30], self.nominal_state[31], self.nominal_state[32]
 
-            #print("Cbn", Cbn)
+        Cbn1 = R.from_euler('xyz', [roll1, pitch1, yaw1]).as_matrix()
+        Cbn2 = R.from_euler('xyz', [roll2, pitch2, yaw2]).as_matrix()
+        Cbn3 = R.from_euler('xyz', [roll3, pitch3, yaw3]).as_matrix()
 
-            # Update CbnPlus
-            CbnPlus = Cbn @ (np.eye(3) + skew_symmetric(gyro) * dt)
-            #CbnPlus = np.eye(3)
+        # Get the gyro and accel data for each robot
+        gyro1 = self.gyro_world[0] - self.nominal_state[12:15]
+        gyro2 = self.gyro_world[1] - self.nominal_state[27:30]
+        gyro3 = self.gyro_world[2] - self.nominal_state[42:45]
+
+        accel1 = self.f_ib_b[0] - self.nominal_state[9:12]
+        accel2 = self.f_ib_b[1] - self.nominal_state[24:27]
+        accel3 = self.f_ib_b[2] - self.nominal_state[39:42]
+
+        # Update CbnPlus for each robot
+        CbnPlus1 = Cbn1 @ (np.eye(3) + skew_symmetric(gyro1) * dt)
+        CbnPlus2 = Cbn2 @ (np.eye(3) + skew_symmetric(gyro2) * dt)
+        CbnPlus3 = Cbn3 @ (np.eye(3) + skew_symmetric(gyro3) * dt)
+
+        # Velocity and Position Prediction for each robot
+        for i, (CbnPlus, accel, idx) in enumerate(zip([CbnPlus1, CbnPlus2, CbnPlus3],
+                                                    [accel1, accel2, accel3],
+                                                    [0, 15, 30])):
 
             # Velocity prediction
             v_minus = self.nominal_state[idx+3:idx+6]
@@ -150,31 +198,33 @@ class EKFNode(Node):
 
             # Position prediction
             r_minus = self.nominal_state[idx+6:idx+9]
-            r_plus = r_minus - (dt / 2) * (v_minus + v_plus)
+            r_plus = r_minus + (dt / 2) * (v_minus + v_plus)
             self.nominal_state[idx+6:idx+9] = r_plus
 
+        # Construct F matrices for each robot
+        F1_block = construct_F(CbnPlus1, accel1)
+        F2_block = construct_F(CbnPlus2, accel2)
+        F3_block = construct_F(CbnPlus3, accel3)
 
+        # Calculate Q matrices for each robot
+        Q = calc_Q(dt, CbnPlus1, accel1)
 
-            # Construct F matrix
-            F = construct_F(CbnPlus, accel)
+        # Build the full F1 matrix
+        F1_block = np.eye(15) + F1_block * dt
+        F2_block = np.eye(15) + F2_block * dt
+        F3_block = np.eye(15) + F3_block * dt
 
-            # Calculate Q matrix
-            Q = calc_Q(dt, CbnPlus, accel)
+        F1 = np.block([
+            [F1_block, np.zeros((15, 15)), np.zeros((15, 15))],
+            [np.zeros((15, 15)), F2_block, np.zeros((15, 15))],
+            [np.zeros((15, 15)), np.zeros((15, 15)), F3_block]
+        ])
 
-            #print("Q[3:6, 3:6]:\n", Q[12:15, 12:15])
+        # Update error state and covariance
+        self.error_state = F1 @ self.error_state
 
-            F1_block = np.eye(15) + F * dt
+        self.covariance = F1 @ self.covariance @ F1.T + Q
 
-            F1 = np.block([
-                [F1_block, np.zeros((15, 15)), np.zeros((15, 15))],
-            [np.zeros((15, 15)), F1_block, np.zeros((15, 15))],
-            [np.zeros((15, 15)), np.zeros((15, 15)), F1_block]
-            ])
-
-            self.error_state = F1 @ self.error_state
-
-            # Propagate error state covariance
-            self.covariance = F1 @ self.covariance @ F1.T + Q
 
     def update(self, z, R, sensor_type, robot_idx1, robot_idx2=None, zero_velocity = False):
         if sensor_type == 'uwb':
@@ -226,35 +276,28 @@ class EKFNode(Node):
         # Ensure S is positive definite before inverting
         if np.all(np.linalg.eigvals(S) > 0):
             K = self.covariance @ H.T @ np.linalg.inv(S)
+            #print(K)
             # Update the error state and covariance matrix
             delta_error_state = K @ y
             #print(delta_error_state)
             I = np.eye(45)
-            self.covariance = (I - K @ H) @ self.covariance
+            I_KH = I - K @ H
+            self.covariance = (I_KH @ self.covariance @ np.transpose(I_KH)) + K @ R @ np.transpose(K)
         else:
-            self.get_logger().warn('Measurement covariance matrix is not positive definite. Skipping update.')
-            return
+           self.get_logger().warn('Measurement covariance matrix is not positive definite. Skipping update.')
+           return
 
         # Correct the nominal state with the error state
         self.nominal_state += delta_error_state
         # Reset the error state
         self.error_state = np.zeros(45)
 
-    def imu_callback_1(self, msg):
-        self.process_imu(msg, 0)
-
-    def imu_callback_2(self, msg):
-        self.process_imu(msg, 1)
-
-    def imu_callback_3(self, msg):
-        self.process_imu(msg, 2)
-
     def process_imu(self, msg, robot_index):
         imu_accel = np.array([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z])
         imu_gyro = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]) * np.pi / 180 # rad/sec
         
         # Store measurements for use in predict function
-        #imu_accel[2] = 9.8
+        imu_accel[2] = 9.8
         self.f_ib_b[robot_index] = imu_accel
 
         self.gyro_world[robot_index] = imu_gyro
@@ -282,12 +325,12 @@ class EKFNode(Node):
             self.initialized[robot_index] = True
 
         odom_velocity = np.array([msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z])
-        R_mat = np.diag([0.04] * 3)  # Only 3x3 matrix for velocity noise
+        R_mat = np.diag([0.0001] * 3)  # Only 3x3 matrix for velocity noise
         self.update(odom_velocity, R_mat, 'odom', robot_index)
 
 
     def timer_callback(self):
-        dt = 0.1  # Time step
+        dt = 0.02  # Time step
         self.predict(dt)
         self.publish_state_and_covariance()
 
@@ -322,3 +365,4 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
