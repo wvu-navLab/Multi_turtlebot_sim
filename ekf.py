@@ -101,14 +101,7 @@ def calc_Q(dt, CbnPlus, accel):
     Q_diag[12:15] = np.random.normal(0, Sbgd, 3)  # Gyro bias noise
 
     # Build the diagonal Q matrix
-    Q_block = np.diag(Q_diag)
-
-    # Extend Q to 45x45 block diagonal matrix for 3 robots
-    Q = np.block([
-        [Q_block, np.zeros((15, 15)), np.zeros((15, 15))],
-        [np.zeros((15, 15)), Q_block, np.zeros((15, 15))],
-        [np.zeros((15, 15)), np.zeros((15, 15)), Q_block]
-    ])
+    Q = np.diag(Q_diag)
 
     return Q
 
@@ -207,7 +200,16 @@ class EKFNode(Node):
         F3_block = construct_F(CbnPlus3, accel3)
 
         # Calculate Q matrices for each robot
-        Q = calc_Q(dt, CbnPlus1, accel1)
+        Q1 = calc_Q(dt, CbnPlus1, accel1)
+        Q2 = calc_Q(dt, CbnPlus2, accel2)
+        Q3 = calc_Q(dt, CbnPlus3, accel3)
+
+        # Extend Q to 45x45 block diagonal matrix for 3 robots
+        Q = np.block([
+            [Q1, np.zeros((15, 15)), np.zeros((15, 15))],
+            [np.zeros((15, 15)), Q2, np.zeros((15, 15))],
+            [np.zeros((15, 15)), np.zeros((15, 15)), Q3]
+        ])
 
         # Build the full F1 matrix
         F1_block = np.eye(15) + F1_block * dt
@@ -244,7 +246,7 @@ class EKFNode(Node):
             H[0, idx2+8] = (pz2 - pz1) / predicted_distance
 
             # Measurement residual
-            y = z - H @ self.nominal_state
+            y = z - H @ self.error_state
 
         elif sensor_type == 'odom':
             idx = robot_idx1 * 15
@@ -253,7 +255,7 @@ class EKFNode(Node):
             H[1, idx+4] = -1  # vy
             H[2, idx+5] = -1  # vz
             # Measurement residual for velocity
-            y = z - H @ self.nominal_state # Only compare velocity
+            y = z - H @ self.error_state # Only compare velocity
 
         # Zero Velocity Update (ZVU)
         '''elif zero_velocity:
@@ -365,4 +367,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
