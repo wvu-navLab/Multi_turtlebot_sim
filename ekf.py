@@ -30,7 +30,7 @@ def construct_F(CbnPlus, accel):
     return F
 
 def calc_Q(dt, CbnPlus, accel):
-    gg = 9.80665
+    gg = 9.8
     
     # Convert biases and noise to SI units
     sig_gyro_inRun = 0.2 * np.pi / 180 / 3600  # rad/s
@@ -117,7 +117,21 @@ class EKFNode(Node):
         # State vector: [attitude, velocity, position, acc bias, gyro bias] for each robot
         self.nominal_state = np.zeros(45)  # 15 states per robot, 3 robots
         self.error_state = np.zeros(45)    # 15 error states per robot, 3 robots
-        self.covariance = np.eye(45) * 0.01
+        self.covariance = np.eye(45)
+
+        # Define the variances for each state component
+        attitude_variance = 0.1
+        position_variance = 0.2
+        velocity_variance = 0.01
+        bias_variance = 0.0001
+
+    # Loop through each robot and update the corresponding covariance block
+        for i in range(3):
+            start_idx = i * 15  
+            self.covariance[start_idx:start_idx+3, start_idx:start_idx+3] = np.eye(3) * attitude_variance
+            self.covariance[start_idx+3:start_idx+6, start_idx+3:start_idx+6] = np.eye(3) * position_variance
+            self.covariance[start_idx+6:start_idx+9, start_idx+6:start_idx+9] = np.eye(3) * velocity_variance
+            self.covariance[start_idx+9:start_idx+15, start_idx+9:start_idx+15] = np.eye(6) * bias_variance
         self.initialized = [False, False, False]
         self.f_ib_b = [np.zeros(3), np.zeros(3), np.zeros(3)]
         self.gyro_world = [np.zeros(3), np.zeros(3), np.zeros(3)]
@@ -154,7 +168,7 @@ class EKFNode(Node):
         self.process_imu(imu_msg_3, 2)
 
     def predict(self, dt):
-        g = np.array([0, 0, -9.81])  # gravity vector
+        g = np.array([0, 0, -9.8])  # gravity vector
 
         # Process the IMU data for each robot simultaneously
         roll1, pitch1, yaw1 = self.nominal_state[0], self.nominal_state[1], self.nominal_state[2]
@@ -169,6 +183,8 @@ class EKFNode(Node):
         gyro1 = self.gyro_world[0] - self.nominal_state[12:15]
         gyro2 = self.gyro_world[1] - self.nominal_state[27:30]
         gyro3 = self.gyro_world[2] - self.nominal_state[42:45]
+
+        #print(self.f_ib_b)
 
         accel1 = self.f_ib_b[0] - self.nominal_state[9:12]
         accel2 = self.f_ib_b[1] - self.nominal_state[24:27]
@@ -274,33 +290,37 @@ class EKFNode(Node):
 
         # Measurement covariance
         S = H @ self.covariance @ H.T + R
+
+        #print(self.covariance)
         
         # Ensure S is positive definite before inverting
-        if np.all(np.linalg.eigvals(S) > 0):
-            K = self.covariance @ H.T @ np.linalg.inv(S)
-            #print(K)
-            # Update the error state and covariance matrix
-            delta_error_state = K @ y
-            #print(delta_error_state)
-            I = np.eye(45)
-            I_KH = I - K @ H
-            self.covariance = (I_KH @ self.covariance @ np.transpose(I_KH)) + K @ R @ np.transpose(K)
-        else:
-           self.get_logger().warn('Measurement covariance matrix is not positive definite. Skipping update.')
-           return
+        #if np.all(np.linalg.eigvals(S) > 0):
+        K = self.covariance @ H.T @ np.linalg.inv(S)
+        #print(K)
+        # Update the error state and covariance matrix
+        self.error_state += K @ y
+        #print(delta_error_state)
+        I = np.eye(45)
+        I_KH = I - K @ H
+        self.covariance = (I_KH @ self.covariance @ np.transpose(I_KH)) + K @ R @ np.transpose(K)
+        #else:
+           #self.get_logger().warn('Measurement covariance matrix is not positive definite. Skipping update.')
+          # return
 
         # Correct the nominal state with the error state
-        self.nominal_state += delta_error_state
+        self.nominal_state += self.error_state
         # Reset the error state
         self.error_state = np.zeros(45)
 
     def process_imu(self, msg, robot_index):
         imu_accel = np.array([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z])
-        imu_gyro = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]) * np.pi / 180 # rad/sec
         
-        # Store measurements for use in predict function
-        imu_accel[2] = 9.8
+        imu_gyro = np.array([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]) 
+        imu_accel[2] = 9.8 + np.random.normal(0, 0.01)
+        #print(imu_accel)
+
         self.f_ib_b[robot_index] = imu_accel
+
 
         self.gyro_world[robot_index] = imu_gyro
 
@@ -327,7 +347,7 @@ class EKFNode(Node):
             self.initialized[robot_index] = True
 
         odom_velocity = np.array([msg.twist.twist.linear.x, msg.twist.twist.linear.y, msg.twist.twist.linear.z])
-        R_mat = np.diag([0.0001] * 3)  # Only 3x3 matrix for velocity noise
+        R_mat = np.diag([0.01] * 3)  # Only 3x3 matrix for velocity noise
         self.update(odom_velocity, R_mat, 'odom', robot_index)
 
 
